@@ -1,0 +1,18 @@
+# Environments
+.venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# System
+.DS_Store
+.vscode/
+
+# Data and Models
+qdrant_data/
+qdrant_storage/
+data/
+models/
+storage/bm25_index.pkl

@@ -1,50 +1,77 @@
-import httpx
-from bs4 import BeautifulSoup
-from typing import Dict, Optional
-import logging
+"""
+UK Job Market Scraper
+Generates 4 curated static documents for UK salary and visa data.
+"""
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import json, hashlib, argparse
+from datetime import datetime, timezone
+from pathlib import Path
+from src.utils.logging import get_logger
 
-class KubeScraper:
-    def __init__(self):
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+logger = get_logger(__name__)
+
+def scrape_uk_job_market(output_dir, sources=None):
+    sources = sources or ["static"]
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    saved = 0
+
+    if "static" in sources:
+        saved = generate_static_market_docs(output_path)
+
+    logger.info("scrape_complete", saved=saved)
+    return {"saved": saved}
+
+def _save_doc(doc, output_path):
+    filename = hashlib.md5(doc["url"].encode()).hexdigest() + ".json"
+    with open(output_path / filename, "w") as f:
+        json.dump(doc, f, indent=2)
+
+def generate_static_market_docs(output_path):
+    docs = [
+        {
+            "url": "internal://uk-tech-salaries-2024",
+            "title": "UK Technology Sector Salary Guide 2024",
+            "content": "UK Technology Sector Salary Guide 2024. Junior Software Engineer: £35k-£50k. Mid-level: £55k-£80k. Senior: £80k-£110k.",
+            "doc_type": "ukjobs",
+            "metadata": {"source": "curated", "type": "salary_data"},
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+        },
+        {
+            "url": "internal://uk-visa-sponsorship-guide-2024",
+            "title": "UK Skilled Worker Visa Guide 2024",
+            "content": "The Skilled Worker visa requires a job offer from a licensed sponsor. Minimum salary threshold as of April 2024 is £38,700.",
+            "doc_type": "ukjobs",
+            "metadata": {"source": "curated", "type": "visa_guidance"},
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+        },
+        {
+            "url": "internal://uk-tech-hiring-trends-2024",
+            "title": "UK Tech Hiring Trends 2024",
+            "content": "In-demand languages: Java (Spring Boot), Python (FastAPI/Django), TypeScript. Hybrid work is standard (65% of roles).",
+            "doc_type": "ukjobs",
+            "metadata": {"source": "curated", "type": "hiring_trends"},
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+        },
+        {
+            "url": "internal://uk-java-backend-roles-2024",
+            "title": "Java Backend Engineer Roles UK",
+            "content": "Key requirements: Java 17/21, Spring Boot 3.x, REST APIs, SQL, Docker, and CI/CD pipelines. Fintech roles often require FCA/PCI-DSS awareness.",
+            "doc_type": "ukjobs",
+            "metadata": {"source": "curated", "type": "role_guide"},
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
         }
+    ]
 
-    def scrape_page(self, url: str) -> Optional[Dict[str, str]]:
-        """
-        Fetches a Kubernetes documentation page and extracts clean content.
-        """
-        if not url.startswith("https://kubernetes.io/docs/"):
-            logger.error(f"Rejected URL outside target domain: {url}")
-            return None
+    for doc in docs:
+        _save_doc(doc, output_path)
+    logger.info("static_docs_generated", count=len(docs))
+    return len(docs)
 
-        try:
-            logger.info(f"Fetching document path: {url}")
-            response = httpx.get(url, headers=self.headers, timeout=10.0)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.text, "lxml")
-            main_content = soup.find("main") or soup.find(id="main-doc")
-            
-            if not main_content:
-                logger.warning(f"Could not isolate main content body for: {url}")
-                return None
-
-            # Remove navigation, scripts, and footer noise
-            for noisy_element in main_content.find_all(["nav", "script", "style", "footer"]):
-                noisy_element.decompose()
-
-            title = soup.find("h1").get_text(strip=True) if soup.find("h1") else "Untitled K8s Document"
-            clean_text = main_content.get_text(separator="\n", strip=True)
-
-            return {
-                "source_url": url,
-                "title": title,
-                "raw_content": clean_text
-            }
-
-        except Exception as e:
-            logger.error(f"Failed pulling document from {url}. Error: {str(e)}")
-            return None
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="UK Job Market Data Scraper")
+    parser.add_argument("--output", required=True, help="Directory to save JSON files")
+    parser.add_argument("--sources", nargs="+", default=["static"], help="Sources to scrape")
+    
+    args = parser.parse_args()
+    scrape_uk_job_market(args.output, sources=args.sources)

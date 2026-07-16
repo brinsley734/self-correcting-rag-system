@@ -5,6 +5,15 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
 
-    model_config = SettingsConfigDict(case_sensitive=True)
+    # Add your new collection name
+    COLLECTION_NAME: str = "ukjobs_docs"
+
+    # Infrastructure connection settings
+    QDRANT_HOST: str = "localhost"
+    QDRANT_PORT: int = 6333
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
+    # Link to your .env file here
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 settings = Settings()

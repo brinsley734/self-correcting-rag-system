@@ -12,11 +12,16 @@ services:
              uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       - PYTHONUNBUFFERED=1
+      # --- Add these to link your application code with your backend services ---
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OLLAMA_BASE_URL=http://ollama:11434
     depends_on:
       - qdrant
+      - ollama
 
   qdrant:
-    image: qdrant/qdrant:v1.9.1
+    image: qdrant/qdrant:v1.15.1
     container_name: rag_agent_vector_db
     ports:
       - "6333:6333"
@@ -24,5 +29,14 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_storage:/root/.ollama
+
 volumes:
   qdrant_storage:
+  ollama_storage:
