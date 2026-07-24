@@ -1,5 +1,22 @@
 import os
+import logging
 from openai import OpenAI
+
+# --- BEGIN MONKEY-PATCH FOR OPENAI/PYDANTIC BUG ---
+import openai._compat as _compat
+_original_model_dump = _compat.model_dump
+def _patched_model_dump(model, *, exclude_unset=False, by_alias=None, **kw):
+    return _original_model_dump(
+        model, 
+        exclude_unset=exclude_unset, 
+        by_alias=bool(by_alias) if by_alias is not None else False, 
+        **kw
+    )
+_compat.model_dump = _patched_model_dump
+# --- END MONKEY-PATCH ---
+
+# Prevent verbose internal library logs from triggering Pydantic validation mismatches
+logging.getLogger("openai").setLevel(logging.INFO)
 
 # Initialize the inference client wrapper.
 # Default base_url points to a local Ollama service, but can be overridden via env vars.
@@ -76,3 +93,41 @@ def generate_answer(query, dense_results, model_name="llama3.2"):
         
     except Exception as e:
         return f"Error executing generation inference block: {e}"
+
+
+def generate_answer_stream(query, dense_results, model_name="llama3.2"):
+    """
+    Coordinates context assembly, evaluates threshold checks, and streams 
+    the generated answer token-by-token from the LLM generation engine.
+    """
+    # 1. Assemble the retrieved contexts from vector storage search
+    context = assemble_context(dense_results, threshold=0.4)
+    
+    # 2. Short-circuit early if hallucination guardrail fallback was triggered
+    if context is None:
+        yield "I cannot find the answer within the provided context."
+        return
+        
+    # 3. Build the structured engineering prompt layout
+    final_prompt = build_final_prompt(query, context)
+        
+    try:
+        # 4. Fire the streaming inference request payload to the model provider
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "user", "content": final_prompt}
+            ],
+            temperature=0.0,
+            max_tokens=400,
+            stream=True  # Enable streaming mode
+        )
+        
+        # 5. Yield chunks as they arrive from the local Ollama instance
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+                
+    except Exception as e:
+        yield f"Error executing generation inference block: {e}"

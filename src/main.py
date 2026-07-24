@@ -5,7 +5,7 @@ import uuid
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -16,6 +16,7 @@ from src.config import settings
 from src.ingestion.pipeline import IngestionPipeline
 from src.core.model_registry import get_registry
 from src.api.routes import models as model_routes
+from src.generation import generate_answer_stream
 
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
@@ -95,6 +96,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Streaming RAG Endpoint ---
+@app.post("/api/chat-stream", tags=["Retrieval & Generation"])
+async def chat_stream(payload: dict):
+    question = payload.get("question", "")
+    model_name = payload.get("model", "llama3.2")
+    limit = payload.get("limit", 3)
+    
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    registry = get_registry()
+    encoder = registry.current_embedding_model
+    reranker = registry.current_reranker_model
+    
+    if encoder is None or reranker is None:
+        raise HTTPException(status_code=503, detail="Models are still loading.")
+
+    try:
+        # 1. Encode query and retrieve initial candidates from Qdrant
+        query_vector = encoder.encode(question).tolist()
+        search_results = await async_qdrant.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=10 
+        )
+        
+        # 2. Rerank results using the cross-encoder
+        if search_results:
+            pairs = [(question, hit.payload.get("content")) for hit in search_results if hit.payload and hit.payload.get("content")]
+            if pairs:
+                scores = reranker.predict(pairs)
+                ranked_results = sorted(zip(search_results[:len(pairs)], scores), key=lambda x: x[1], reverse=True)
+                top_chunks = [hit[0] for hit in ranked_results[:limit]]
+            else:
+                top_chunks = []
+        else:
+            top_chunks = []
+            
+        # 3. Stream generated response token-by-token
+        return StreamingResponse(
+            generate_answer_stream(question, top_chunks, model_name=model_name), 
+            media_type="text/event-stream"
+        )
+
+    except Exception as e:
+        logger.error(f"Streaming query processing error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Mount Static Frontend & UI Dashboard ---
 os.makedirs("static/benchmarks", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -169,10 +219,13 @@ async def process_rag_query(payload: QueryRequest):
         )
         
         if search_results:
-            pairs = [(payload.question, hit.payload.get("content")) for hit in search_results]
-            scores = reranker.predict(pairs)
-            ranked_results = sorted(zip(search_results, scores), key=lambda x: x[1], reverse=True)
-            top_chunks = [hit[0].payload.get("content") for hit in ranked_results[:payload.limit]]
+            pairs = [(payload.question, hit.payload.get("content")) for hit in search_results if hit.payload and hit.payload.get("content")]
+            if pairs:
+                scores = reranker.predict(pairs)
+                ranked_results = sorted(zip(search_results[:len(pairs)], scores), key=lambda x: x[1], reverse=True)
+                top_chunks = [hit[0].payload.get("content") for hit in ranked_results[:payload.limit]]
+            else:
+                top_chunks = []
         else:
             top_chunks = []
             
