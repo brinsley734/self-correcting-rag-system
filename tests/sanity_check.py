@@ -1,51 +1,41 @@
-import sys
-import os
+import pytest
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Fixtures allow for efficient resource management across tests
+@pytest.fixture(scope="module")
+def qdrant():
+    return QdrantClient(url="http://localhost:6333")
 
-def run_diagnostics():
-    print("=== STARTING RAG COMPONENT DIAGNOSTICS ===")
-    print("\n[1/4] Connecting to backend storage contexts...")
-    try:
-        qdrant_client = QdrantClient(url="http://localhost:6333")
-        collection_info = qdrant_client.get_collection("k8s_docs")
-        print(f"SUCCESS: Connected to Qdrant. Found 'k8s_docs' with {collection_info.points_count} points.")
-    except Exception as e:
-        print(f"FAILED: Could not connect to Qdrant registry. Error: {e}")
-        return
+@pytest.fixture(scope="module")
+def encoder():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-    print("Loading embedding model...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    
-    print("\n[2/4] Testing Lexical Keyword Filtering (Sparse Validation)...")
-    print("SUCCESS: BM25 index returned exact keyword document matches.")
+def test_qdrant_connectivity(qdrant):
+    """Test 1: Verify Qdrant connection and collection existence."""
+    collection_info = qdrant.get_collection("k8s_docs")
+    assert collection_info is not None
+    assert collection_info.points_count > 0, "Collection 'k8s_docs' is empty"
 
-    print("\n[3/4] Testing Semantic Vector Inference (Dense Validation)...")
+def test_model_initialization(encoder):
+    """Test 2: Ensure the embedding model loads correctly."""
+    assert encoder is not None, "SentenceTransformer model failed to initialize"
+
+def test_semantic_retrieval_performance(qdrant, encoder):
+    """Test 3: Validate that the dense retrieval layer returns relevant results."""
     semantic_query = "scaling app pods automatically based on system demand"
-    print(f"Query: '{semantic_query}'")
+    query_vector = encoder.encode(semantic_query).tolist()
     
-    query_vector = model.encode(semantic_query).tolist()
-    
-    dense_results = qdrant_client.search(
+    dense_results = qdrant.search(
         collection_name="k8s_docs",
         query_vector=query_vector,
         limit=3
     )
     
-    print("Top semantic hits retrieved:")
-    for i, hit in enumerate(dense_results):
-        print(f"  Hit {i+1} (Score: {hit.score:.4f}): {hit.payload.get('text', '')[:80]}...")
-        
-    if len(dense_results) > 0 and dense_results[0].score > 0.4:
-        print("SUCCESS: Dense layer captured semantic meaning correctly.")
-    else:
-        print("WARNING: Weak semantic similarity scores.")
+    assert len(dense_results) > 0, "No results returned for semantic query"
+    assert dense_results[0].score > 0.4, f"Semantic similarity score too low: {dense_results[0].score}"
 
-    print("\n[4/4] Asserting Prompt Context Hallucination Guards...")
-    print("SUCCESS: Guardrails set up to catch out-of-bounds responses safely.")
-    print("\n=== DIAGNOSTICS COMPLETE: PIPELINE READY ===")
-
+# Allows manual execution: python tests/sanity_check.py
 if __name__ == "__main__":
-    run_diagnostics()
+    print("Running diagnostics via pytest.main()...")
+    pytest.main([__file__])
