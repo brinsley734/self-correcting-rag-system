@@ -2,17 +2,20 @@ import os
 import logging
 import time
 import uuid
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import httpx
-
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.http import models
 from src.config import settings
 from src.ingestion.pipeline import IngestionPipeline
-from qdrant_client import AsyncQdrantClient, models
+from src.core.model_registry import get_registry
+from src.api.routes import models as model_routes
 
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
@@ -57,35 +60,22 @@ async def save_to_cache(client: AsyncQdrantClient, query_vector: List[float], an
     )
 
 # --- State Container ---
-class AppState:
-    encoder: Optional[SentenceTransformer] = None
-    reranker: Optional[CrossEncoder] = None
-    http_client: Optional[httpx.AsyncClient] = None
-
-state = AppState()
 async_qdrant = AsyncQdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
 COLLECTION_NAME = "uk_jobs_data"
 
 # --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize ML models
-    logger.info("Initializing ML models...")
-    state.encoder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
-    state.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    logger.info("Initializing Model Registry singleton...")
+    registry = get_registry()
+    registry.initialise()
     
-    # Initialize persistent HTTP client
-    state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
-    
-    # Initialize cache
+    app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
     await setup_cache_collection(async_qdrant)
     
     yield
     
-    # Cleanup
-    await state.http_client.aclose()
-    state.encoder = None
-    state.reranker = None
+    await app.state.http_client.aclose()
     logger.info("Shutdown complete.")
 
 # --- App Initialization ---
@@ -95,6 +85,26 @@ app = FastAPI(
     description="Asynchronous backend engine with reranking, performance monitoring, and semantic caching.",
     version=settings.VERSION
 )
+
+# --- Add CORS Middleware ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Mount Static Frontend & UI Dashboard ---
+os.makedirs("static/benchmarks", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/", tags=["UI Dashboard"])
+async def read_index():
+    return FileResponse("static/index.html")
+
+# --- Mount Routers ---
+app.include_router(model_routes.router, prefix="/api/v1/models", tags=["Model Management"])
 
 # --- Data Structures ---
 class QueryRequest(BaseModel):
@@ -131,13 +141,16 @@ async def trigger_ingestion(background_tasks: BackgroundTasks):
 
 @app.post("/query", response_model=QueryResponse, tags=["Retrieval & Generation"])
 async def process_rag_query(payload: QueryRequest):
-    if state.encoder is None or state.reranker is None:
+    registry = get_registry()
+    encoder = registry.current_embedding_model
+    reranker = registry.current_reranker_model
+    
+    if encoder is None or reranker is None:
         raise HTTPException(status_code=503, detail="Models are still loading.")
     
     start_total = time.time()
-    query_vector = state.encoder.encode(payload.question).tolist()
+    query_vector = encoder.encode(payload.question).tolist()
     
-    # 0. Check Cache First
     cached_hit = await get_from_cache(async_qdrant, query_vector)
     if cached_hit:
         logger.info("Cache HIT: Returning stored answer.")
@@ -148,7 +161,6 @@ async def process_rag_query(payload: QueryRequest):
         )
     
     try:
-        # 1. Vector Retrieval
         start_retrieval = time.time()
         search_results = await async_qdrant.search(
             collection_name=COLLECTION_NAME,
@@ -156,10 +168,9 @@ async def process_rag_query(payload: QueryRequest):
             limit=10 
         )
         
-        # 2. Reranking
         if search_results:
             pairs = [(payload.question, hit.payload.get("content")) for hit in search_results]
-            scores = state.reranker.predict(pairs)
+            scores = reranker.predict(pairs)
             ranked_results = sorted(zip(search_results, scores), key=lambda x: x[1], reverse=True)
             top_chunks = [hit[0].payload.get("content") for hit in ranked_results[:payload.limit]]
         else:
@@ -168,7 +179,6 @@ async def process_rag_query(payload: QueryRequest):
         retrieval_time = time.time() - start_retrieval
         context_str = "\n---\n".join(set(top_chunks)) if top_chunks else "No relevant context found."
         
-        # 3. LLM Synthesis
         ollama_payload = {
             "model": "llama3.2",
             "messages": [
@@ -178,12 +188,12 @@ async def process_rag_query(payload: QueryRequest):
             "stream": False
         }
         
-        gen_res = await state.http_client.post(f"{settings.OLLAMA_BASE_URL}/api/chat", json=ollama_payload)
+        http_client = app.state.http_client
+        gen_res = await http_client.post(f"{settings.OLLAMA_BASE_URL}/api/chat", json=ollama_payload)
         gen_res.raise_for_status()
         
         llm_answer = gen_res.json()["message"]["content"]
         
-        # 4. Save to Cache
         await save_to_cache(async_qdrant, query_vector, llm_answer, payload.question)
         
         total_time = time.time() - start_total
