@@ -3,31 +3,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RAG Agent Chat</title>
+    <title>RAG Agent Chat & CV Tools</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f7f7f8; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f7f7f8; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Main Layout Split */
+        #main-app { display: flex; flex: 1; height: 100vh; overflow: hidden; }
+        #chat-section { flex: 1; display: flex; flex-direction: column; height: 100vh; }
+        
         header { background: #ffffff; padding: 1rem; border-bottom: 1px solid #e5e5e5; text-align: center; font-weight: bold; font-size: 1.1rem; }
         #chat-container { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; max-width: 800px; width: 100%; margin: 0 auto; box-sizing: border-box; }
         .message { padding: 0.8rem 1.2rem; border-radius: 8px; max-width: 75%; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
         .user { background: #007bff; color: white; align-self: flex-end; }
         .assistant { background: #e5e5ea; color: black; align-self: flex-start; }
+        
         #input-container { background: #ffffff; padding: 1rem; border-top: 1px solid #e5e5e5; display: flex; justify-content: center; }
         #form { display: flex; max-width: 800px; width: 100%; gap: 0.5rem; }
         #question-input { flex: 1; padding: 0.8rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; outline: none; }
         #send-btn { padding: 0.8rem 1.5rem; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; }
         #send-btn:hover { background: #0056b3; }
+
+        /* Sidebar Styling */
+        #sidebar { width: 320px; background: #ffffff; border-left: 1px solid #e5e5e5; display: flex; flex-direction: column; padding: 1rem; box-sizing: border-box; overflow-y: auto; }
+        .sidebar-section h3 { font-size: 1rem; margin-top: 0; margin-bottom: 1rem; color: #333; }
+        .card { background: #f8f9fa; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+        .btn { padding: 0.6rem 1rem; border: none; border-radius: 4px; font-size: 0.9rem; cursor: pointer; font-weight: 500; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #5a6268; }
+        .w-100 { width: 100%; }
+        .mb-3 { margin-bottom: 1rem; }
+        .small { font-size: 0.85rem; color: #666; }
+
+        /* Modal Pop-up Styling */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-overlay.d-none { display: none; }
+        .modal-content { background: white; padding: 2rem; border-radius: 8px; width: 600px; max-width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
     </style>
 </head>
 <body>
-    <header>RAG Agent Chat</header>
-    <div id="chat-container">
-        <div class="message assistant">Hello! Type your question below to query the streaming RAG system.</div>
+
+    <div id="main-app">
+        <!-- Chat Section -->
+        <div id="chat-section">
+            <header>RAG Agent Chat</header>
+            <div id="chat-container">
+                <div class="message assistant chat-message assistant-message">Hello! Type your question below to query the streaming RAG system.</div>
+            </div>
+            <div id="input-container">
+                <form id="form">
+                    <input type="text" id="question-input" placeholder="Type your question here..." autocomplete="off" required>
+                    <button type="submit" id="send-btn">Send</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Right Side Panel / Sidebar -->
+        <div id="sidebar">
+            <div class="sidebar-section">
+                <h3>Agent Tools & Analytics</h3>
+                
+                <!-- Model Stats Sidebar Trigger Button -->
+                <button id="sidebar-stats-btn" class="btn btn-secondary w-100 mb-3">
+                    📊 View Model Benchmark Stats
+                </button>
+
+                <!-- Chat Export Feature -->
+                <div class="card">
+                    <h5 style="margin:0 0 0.5rem 0; font-size:0.95rem;">Export Chat History</h5>
+                    <p class="small mb-2">Download all questions and answers as a formatted Word document.</p>
+                    <button id="export-chat-docx-btn" class="btn btn-primary w-100">
+                        📥 Download Chat (.docx)
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
-    <div id="input-container">
-        <form id="form">
-            <input type="text" id="question-input" placeholder="Type your question here..." autocomplete="off" required>
-            <button type="submit" id="send-btn">Send</button>
-        </form>
+
+    <!-- Modal Pop-up for Model Benchmarks / Stats -->
+    <div id="model-stats-modal" class="modal-overlay d-none">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="margin: 0;">Model Performance Benchmarks</h3>
+                <button id="close-stats-modal" class="btn btn-secondary" style="padding: 0.3rem 0.6rem;">✕</button>
+            </div>
+            <div id="modal-stats-body">
+                <p class="small">Comparative metrics showing latency, retrieval accuracy, and hallucination scores across evaluation frameworks.</p>
+                <div style="background: #f1f3f5; padding: 1.5rem; border-radius: 6px; text-align: center; color: #495057;">
+                    [Interactive Performance Charts View Loaded]
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -35,17 +102,16 @@
         const input = document.getElementById('question-input');
         const chatContainer = document.getElementById('chat-container');
 
+        // Streaming Form Submission Logic
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const question = input.value.trim();
             if (!question) return;
 
-            // Append user message
-            appendMessage(question, 'user');
+            appendMessage(question, 'user user-message');
             input.value = '';
 
-            // Create a placeholder assistant message bubble that we can update chunk by chunk
-            const assistantMsgDiv = appendMessage('', 'assistant');
+            const assistantMsgDiv = appendMessage('', 'assistant assistant-message');
 
             try {
                 const response = await fetch('/api/chat-stream', {
@@ -67,8 +133,6 @@
                     if (done) break;
                     
                     accumulatedText += decoder.decode(value, { stream: true });
-                    
-                    // Update the text content of the live streaming assistant bubble
                     assistantMsgDiv.textContent = accumulatedText;
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                 }
@@ -77,13 +141,105 @@
             }
         });
 
-        function appendMessage(text, sender) {
+        function appendMessage(text, className) {
             const msgDiv = document.createElement('div');
-            msgDiv.className = `message ${sender}`;
+            msgDiv.className = `message ${className}`;
             msgDiv.textContent = text;
             chatContainer.appendChild(msgDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
-            return msgDiv; // Return the element reference so it can be modified live
+            return msgDiv; 
+        }
+
+        // Sidebar Model Stats Modal Pop-up Handlers & Data Fetcher
+        const sidebarStatsBtn = document.getElementById('sidebar-stats-btn');
+        const statsModal = document.getElementById('model-stats-modal');
+        const closeStatsModal = document.getElementById('close-stats-modal');
+        const statsBody = document.getElementById('modal-stats-body');
+
+        if (sidebarStatsBtn && statsModal) {
+            sidebarStatsBtn.addEventListener('click', async () => {
+                statsModal.classList.remove('d-none');
+                
+                // Fetch and display live metrics when opening the modal
+                try {
+                    const response = await fetch('/api/v1/metrics/performance');
+                    if (!response.ok) throw new Error('Failed to fetch metrics.');
+                    
+                    const data = await response.json();
+                    const metrics = data.metrics;
+
+                    statsBody.innerHTML = `
+                        <p class="small">Comparative metrics showing latency, retrieval accuracy, and evaluation scores from the backend.</p>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-top: 1rem;">
+                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
+                                <div style="font-size: 0.8rem; color: #666;">Retrieval Latency</div>
+                                <div style="font-size: 1.2rem; font-weight: bold; color: #007bff;">${metrics.retrieval_latency_ms} ms</div>
+                            </div>
+                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
+                                <div style="font-size: 0.8rem; color: #666;">Semantic Cache Hit Rate</div>
+                                <div style="font-size: 1.2rem; font-weight: bold; color: #28a745;">${(metrics.cache_hit_rate * 100).toFixed(1)}%</div>
+                            </div>
+                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
+                                <div style="font-size: 0.8rem; color: #666;">Faithfulness Score</div>
+                                <div style="font-size: 1.2rem; font-weight: bold; color: #17a2b8;">${metrics.faithfulness_score}</div>
+                            </div>
+                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
+                                <div style="font-size: 0.8rem; color: #666;">Answer Relevance</div>
+                                <div style="font-size: 1.2rem; font-weight: bold; color: #ffc107;">${metrics.answer_relevance}</div>
+                            </div>
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('Metrics fetch error:', error);
+                    statsBody.innerHTML = `
+                        <p class="small">Comparative metrics showing latency, retrieval accuracy, and hallucination scores across evaluation frameworks.</p>
+                        <div style="background: #f8d7da; padding: 1rem; border-radius: 6px; text-align: center; color: #721c24;">
+                            Could not load live benchmark metrics from backend.
+                        </div>
+                    `;
+                }
+            });
+        }
+
+        if (closeStatsModal && statsModal) {
+            closeStatsModal.addEventListener('click', () => {
+                statsModal.classList.add('d-none');
+            });
+        }
+
+        // Chat Transcript Export to Word (.docx) Handler
+        const exportChatBtn = document.getElementById('export-chat-docx-btn');
+        if (exportChatBtn) {
+            exportChatBtn.addEventListener('click', async () => {
+                try {
+                    const messageElements = document.querySelectorAll('.chat-message');
+                    const messages = Array.from(messageElements).map(el => ({
+                        role: el.classList.contains('user-message') ? 'user' : 'assistant',
+                        text: el.textContent.trim()
+                    }));
+
+                    const response = await fetch('/api/v1/export/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ messages })
+                    });
+                    
+                    if (!response.ok) throw new Error('Failed to generate chat export.');
+                    
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'chat_transcript.docx';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                } catch (error) {
+                    console.error('Export error:', error);
+                    alert('Could not export chat history at this time.');
+                }
+            });
         }
     </script>
 </body>

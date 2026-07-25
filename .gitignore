@@ -16,3 +16,4 @@ qdrant_storage/
 data/
 models/
 storage/bm25_index.pkl
+rag_agent_docker_backup.tar
