@@ -24,7 +24,7 @@
         #send-btn:hover { background: #0056b3; }
 
         /* Sidebar Styling */
-        #sidebar { width: 320px; background: #ffffff; border-left: 1px solid #e5e5e5; display: flex; flex-direction: column; padding: 1rem; box-sizing: border-box; overflow-y: auto; }
+        #sidebar { width: 340px; background: #ffffff; border-left: 1px solid #e5e5e5; display: flex; flex-direction: column; padding: 1rem; box-sizing: border-box; overflow-y: auto; }
         .sidebar-section h3 { font-size: 1rem; margin-top: 0; margin-bottom: 1rem; color: #333; }
         .card { background: #f8f9fa; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
         .btn { padding: 0.6rem 1rem; border: none; border-radius: 4px; font-size: 0.9rem; cursor: pointer; font-weight: 500; }
@@ -35,6 +35,7 @@
         .w-100 { width: 100%; }
         .mb-3 { margin-bottom: 1rem; }
         .small { font-size: 0.85rem; color: #666; }
+        .d-none { display: none; }
 
         /* Modal Pop-up Styling */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000; }
@@ -49,7 +50,7 @@
         <div id="chat-section">
             <header>RAG Agent Chat</header>
             <div id="chat-container">
-                <div class="message assistant chat-message assistant-message">Hello! Type your question below to query the streaming RAG system.</div>
+                <div class="message assistant">Hello! Type your question below to query the streaming RAG system.</div>
             </div>
             <div id="input-container">
                 <form id="form">
@@ -68,6 +69,40 @@
                 <button id="sidebar-stats-btn" class="btn btn-secondary w-100 mb-3">
                     📊 View Model Benchmark Stats
                 </button>
+
+                <!-- CV Analyser Tool -->
+                <div class="card">
+                    <h5 style="margin:0 0 0.5rem 0; font-size:0.95rem;">CV Analyser & Matcher</h5>
+                    <p class="small mb-2">Upload a .docx or .pdf CV to check corpus matches and visa eligibility.</p>
+                    <input type="file" id="cv-file-input" accept=".docx,.pdf" style="display: none;" onchange="handleCvUpload(this)">
+                    <button onclick="document.getElementById('cv-file-input').click();" class="btn btn-primary w-100">
+                        📄 Upload & Analyse CV
+                    </button>
+                    
+                    <!-- Loading Spinner -->
+                    <div id="cv-loading" class="d-none" style="text-align: center; margin-top: 1rem;">
+                        <div class="small" style="color: #007bff; font-weight: bold;">Analysing CV against corpus...</div>
+                    </div>
+
+                    <!-- Results Box -->
+                    <div id="cv-results" class="d-none" style="margin-top: 1rem; font-size: 0.85rem;">
+                        <div style="background: #e9ecef; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem;">
+                            <strong>Visa Match:</strong> <span id="res-visa-badge">-</span>
+                        </div>
+                        <div style="margin-bottom: 0.5rem;">
+                            <strong>Top Role Match:</strong>
+                            <div id="res-matched-jobs" class="small" style="margin-top: 0.2rem;"></div>
+                        </div>
+                        <div style="margin-bottom: 0.5rem;">
+                            <strong>Found Skills:</strong>
+                            <div id="res-keywords-found" class="small" style="color: #28a745; margin-top: 0.2rem;"></div>
+                        </div>
+                        <div>
+                            <strong>Missing Skills:</strong>
+                            <div id="res-missing-keywords" class="small" style="color: #dc3545; margin-top: 0.2rem;"></div>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Chat Export Feature -->
                 <div class="card">
@@ -108,13 +143,15 @@
             const question = input.value.trim();
             if (!question) return;
 
-            appendMessage(question, 'user user-message');
+            const userMsgDiv = appendMessage(question, 'user');
+            userMsgDiv.dataset.question = question;
             input.value = '';
 
-            const assistantMsgDiv = appendMessage('', 'assistant assistant-message');
+            const startTime = performance.now();
+            const assistantMsgDiv = appendMessage('', 'assistant');
 
             try {
-                const response = await fetch('/api/chat-stream', {
+                const response = await fetch('http://127.0.0.1:8000/api/v1/chat-stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ question })
@@ -127,15 +164,38 @@
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let accumulatedText = "";
+                let buffer = "";
 
                 while (true) {
                     const { value, done } = await reader.read();
                     if (done) break;
                     
-                    accumulatedText += decoder.decode(value, { stream: true });
-                    assistantMsgDiv.textContent = accumulatedText;
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n\n");
+                    buffer = lines.pop(); // Keep any partial chunk in the buffer
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith("data:")) {
+                            const jsonStr = trimmed.replace("data:", "").trim();
+                            try {
+                                const parsed = JSON.parse(jsonStr);
+                                if (parsed.content) {
+                                    accumulatedText += parsed.content;
+                                    assistantMsgDiv.textContent = accumulatedText;
+                                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                                }
+                            } catch (err) {
+                                // Ignore JSON parse errors on partial/malformed frames
+                            }
+                        }
+                    }
                 }
+
+                const latencyMs = performance.now() - startTime;
+                assistantMsgDiv.dataset.latencyMs = latencyMs;
+                assistantMsgDiv.dataset.source = accumulatedText.includes("Source: Web search") ? "Web search fallback" : "RAG corpus";
+                assistantMsgDiv.dataset.question = question;
             } catch (error) {
                 assistantMsgDiv.textContent = 'Error: Could not connect to the RAG backend.';
             }
@@ -150,6 +210,55 @@
             return msgDiv; 
         }
 
+        // CV Analyser Upload & Render Handler
+        async function handleCvUpload(input) {
+            if (!input.files || input.files.length === 0) return;
+            const file = input.files[0];
+            
+            document.getElementById('cv-loading').classList.remove('d-none');
+            document.getElementById('cv-results').classList.add('d-none');
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/v1/cv/analyse', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Failed to analyse CV.');
+                }
+
+                const data = await response.json();
+                renderCvResults(data);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            } finally {
+                document.getElementById('cv-loading').classList.add('d-none');
+            }
+        }
+
+        function renderCvResults(data) {
+            const resultsContainer = document.getElementById('cv-results');
+            resultsContainer.classList.remove('d-none');
+
+            const visaBadge = document.getElementById('res-visa-badge');
+            visaBadge.textContent = data.visa_sponsorship_match;
+            visaBadge.style.color = data.visa_sponsorship_match === 'Likely Eligible' ? '#28a745' : '#ffc107';
+
+            const jobsContainer = document.getElementById('res-matched-jobs');
+            jobsContainer.innerHTML = '';
+            data.matched_jobs.forEach(job => {
+                jobsContainer.innerHTML += `<div>Score: <strong>${Math.round(job.score * 100)}%</strong> - ${job.snippet}</div>`;
+            });
+
+            document.getElementById('res-keywords-found').textContent = data.keywords_found.join(', ') || 'None';
+            document.getElementById('res-missing-keywords').textContent = data.missing_keywords.join(', ') || 'None';
+        }
+
         // Sidebar Model Stats Modal Pop-up Handlers & Data Fetcher
         const sidebarStatsBtn = document.getElementById('sidebar-stats-btn');
         const statsModal = document.getElementById('model-stats-modal');
@@ -160,9 +269,8 @@
             sidebarStatsBtn.addEventListener('click', async () => {
                 statsModal.classList.remove('d-none');
                 
-                // Fetch and display live metrics when opening the modal
                 try {
-                    const response = await fetch('/api/v1/metrics/performance');
+                    const response = await fetch('http://127.0.0.1:8000/api/v1/metrics/performance');
                     if (!response.ok) throw new Error('Failed to fetch metrics.');
                     
                     const data = await response.json();
@@ -212,13 +320,28 @@
         if (exportChatBtn) {
             exportChatBtn.addEventListener('click', async () => {
                 try {
-                    const messageElements = document.querySelectorAll('.chat-message');
-                    const messages = Array.from(messageElements).map(el => ({
-                        role: el.classList.contains('user-message') ? 'user' : 'assistant',
-                        text: el.textContent.trim()
-                    }));
+                    const messageElements = chatContainer.querySelectorAll('.message');
+                    const messages = [];
+                    
+                    let currentQuestion = "";
+                    messageElements.forEach(el => {
+                        const text = el.textContent.trim();
+                        if (text.includes("Hello! Type your question below")) return;
 
-                    const response = await fetch('/api/v1/export/chat', {
+                        if (el.classList.contains('user')) {
+                            currentQuestion = text;
+                        } else if (el.classList.contains('assistant')) {
+                            messages.push({
+                                role: "assistant",
+                                question: el.dataset.question || currentQuestion,
+                                answer: text,
+                                source: el.dataset.source || "RAG corpus",
+                                latency_ms: parseFloat(el.dataset.latencyMs) || 45.0
+                            });
+                        }
+                    });
+
+                    const response = await fetch('http://127.0.0.1:8000/api/v1/export/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ messages })

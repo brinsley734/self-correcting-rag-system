@@ -1,58 +1,78 @@
+import json
 import os
 import logging
 from openai import OpenAI
+from ddgs import DDGS
 
 # --- BEGIN MONKEY-PATCH FOR OPENAI/PYDANTIC BUG ---
 import openai._compat as _compat
 _original_model_dump = _compat.model_dump
 def _patched_model_dump(model, *, exclude_unset=False, by_alias=None, **kw):
     return _original_model_dump(
-        model, 
-        exclude_unset=exclude_unset, 
-        by_alias=bool(by_alias) if by_alias is not None else False, 
+        model,
+        exclude_unset=exclude_unset,
+        by_alias=bool(by_alias) if by_alias is not None else False,
         **kw
     )
 _compat.model_dump = _patched_model_dump
 # --- END MONKEY-PATCH ---
 
-# Prevent verbose internal library logs from triggering Pydantic validation mismatches
 logging.getLogger("openai").setLevel(logging.INFO)
 
-# Initialize the inference client wrapper.
-# Default base_url points to a local Ollama service, but can be overridden via env vars.
 client = OpenAI(
     base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
-    api_key=os.getenv("LLM_API_KEY", "ollama") 
+    api_key=os.getenv("LLM_API_KEY", "ollama")
 )
+
 
 def assemble_context(dense_results, threshold=0.4):
     """
     Filters and joins text payloads from Qdrant hits into a single context string.
     Implements a strict semantic score threshold to prevent hallucination.
     """
-    if not dense_results or dense_results[0].score < threshold:
-        return None  # Trigger hallucination guardrail
+    if not dense_results:
+        return None  # Trigger fallback search
+
+    first_result = dense_results[0]
+    score = getattr(first_result, "score", None)
+    if score is not None and score < threshold:
+        return None  # Trigger fallback search
 
     extracted_chunks = []
     for hit in dense_results:
-        # Changed from "text" to "content" to match your index schema payload key
-        text_content = hit.payload.get("content", "").strip()
+        payload = getattr(hit, "payload", hit)
+        if isinstance(payload, dict):
+            text_content = (payload.get("content") or payload.get("text") or "").strip()
+        else:
+            text_content = str(payload).strip()
+
         if text_content:
             extracted_chunks.append(f"- {text_content}")
-            
-    return "\n\n".join(extracted_chunks)
+
+    return "\n\n".join(extracted_chunks) if extracted_chunks else None
+
+
+def search_web_for_context(query, max_results=3):
+    """
+    Performs a live web search to gather context when local vector retrieval fails.
+    """
+    try:
+        with DDGS() as ddgs:
+            results = [r["body"] for r in ddgs.text(query, max_results=max_results)]
+            if results:
+                print(f"[Web Fallback] Successfully fetched web context for: {query}")
+                return "\n\n".join([f"- {res}" for res in results])
+    except Exception as e:
+        print(f"[Web Fallback Error] {e}")
+    return None
 
 
 def build_final_prompt(query, context_string):
     """
     Wraps the query and structured context into explicit system instructions.
     """
-    prompt = f"""You are a precise technical support assistant specializing in Kubernetes documentation.
-Use ONLY the provided context blocks below to answer the user's query. 
-
-Strict Rules:
-1. If the answer cannot be found completely within the context, say exactly: "I cannot find the answer within the provided context."
-2. Do not use outside knowledge or extrapolate past the facts listed.
+    prompt = f"""You are a precise career, technical, and visa advisor assistant.
+Use ONLY the provided context blocks below to answer the user's query accurately. Do not invent details not present in the context.
 
 ---
 PROVIDED CONTEXT:
@@ -66,68 +86,85 @@ Answer:"""
 
 def generate_answer(query, dense_results, model_name="llama3.2"):
     """
-    Coordinates context assembly, evaluates threshold checks, and executes 
-    the completed prompt layout against the configured LLM generation engine.
+    Non-streaming answer generation. Used for cache population and batch evaluation.
     """
-    # 1. Assemble the retrieved contexts from vector storage search
     context = assemble_context(dense_results, threshold=0.4)
-    
-    # 2. Short-circuit early if hallucination guardrail fallback was triggered
+
     if context is None:
-        return "I cannot find the answer within the provided context."
-        
-    # 3. Build the structured engineering prompt layout
+        print("Local context missing or below threshold. Searching web dynamically...")
+        context = search_web_for_context(query)
+
+    if not context:
+        return "I could not find relevant information locally or via web search to answer your query."
+
     final_prompt = build_final_prompt(query, context)
-        
+
     try:
-        # 4. Fire the inference request payload to the model provider
         response = client.chat.completions.create(
             model=model_name,
-            messages=[
-                {"role": "user", "content": final_prompt}
-            ],
-            temperature=0.0,  # Zeroed out to optimize for deterministic fact extraction
+            messages=[{"role": "user", "content": final_prompt}],
+            temperature=0.0,
             max_tokens=400
         )
         return response.choices[0].message.content.strip()
-        
+
     except Exception as e:
         return f"Error executing generation inference block: {e}"
 
 
-def generate_answer_stream(query, dense_results, model_name="llama3.2"):
+async def generate_answer_stream(query, dense_results, model_name="llama3.2"):
     """
-    Coordinates context assembly, evaluates threshold checks, and streams 
-    the generated answer token-by-token from the LLM generation engine.
+    Async generator that streams LLM response chunks in SSE-compatible JSON format.
+
+    Each yielded chunk is formatted as:
+        data: {"content": "text fragment here"}\n\n
+
+    The frontend reads each chunk, strips "data: ", parses JSON,
+    and appends parsed.content to the displayed message.
+
+    Flow:
+        1. Assemble context from Qdrant results
+        2. If context score below threshold → web search fallback
+        3. Build prompt and stream from Ollama via OpenAI-compatible API
+        4. Yield each token delta as SSE JSON chunk
+        5. Clean up stream on completion or client disconnect
     """
-    # 1. Assemble the retrieved contexts from vector storage search
     context = assemble_context(dense_results, threshold=0.4)
-    
-    # 2. Short-circuit early if hallucination guardrail fallback was triggered
+
     if context is None:
-        yield "I cannot find the answer within the provided context."
+        print("Local context missing or below threshold. Searching web dynamically...")
+        context = search_web_for_context(query)
+
+    if not context:
+        yield 'data: {"content": "I could not find relevant information locally or via web search to answer your query."}\n\n'
         return
-        
-    # 3. Build the structured engineering prompt layout
+
     final_prompt = build_final_prompt(query, context)
-        
+    response = None
+
     try:
-        # 4. Fire the streaming inference request payload to the model provider
         response = client.chat.completions.create(
             model=model_name,
-            messages=[
-                {"role": "user", "content": final_prompt}
-            ],
+            messages=[{"role": "user", "content": final_prompt}],
             temperature=0.0,
             max_tokens=400,
-            stream=True  # Enable streaming mode
+            stream=True
         )
-        
-        # 5. Yield chunks as they arrive from the local Ollama instance
+
         for chunk in response:
             delta = chunk.choices[0].delta.content
             if delta:
-                yield delta
-                
+                # Yield SSE-formatted JSON so frontend can parse parsed.content
+                yield f'data: {{"content": {json.dumps(delta)}}}\n\n'
+
+    except GeneratorExit:
+        # Client disconnected — exit cleanly without error
+        pass
     except Exception as e:
-        yield f"Error executing generation inference block: {e}"
+        yield f'data: {{"content": "Error executing generation inference block: {str(e)}"}}\n\n'
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
