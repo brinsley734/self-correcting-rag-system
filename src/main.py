@@ -1,4 +1,3 @@
-#main.py
 import os
 import logging
 import time
@@ -19,7 +18,7 @@ from src.config import settings
 from src.ingestion.pipeline import IngestionPipeline
 from src.core.model_registry import get_registry
 from src.api.routes import models as model_routes
-from src.generation import generate_answer_stream
+from src.generation import generate_answer_stream, build_final_prompt, client as llm_client
 from src.agent import AutonomousRAGAgent
 from ddgs import DDGS
 from io import BytesIO
@@ -32,7 +31,41 @@ from src.api.routes.corpus import router as corpus_router
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# --- International Query Markers ---
+# Queries containing these markers skip Qdrant entirely
+# and go straight to DuckDuckGo web search.
+# UK cities/regions are intentionally NOT in this list.
+INTERNATIONAL_MARKERS = [
+    "new york", "usa", "united states", "america", "american",
+    "canada", "toronto", "vancouver", "montreal", "calgary",
+    "australia", "sydney", "melbourne", "brisbane",
+    "germany", "berlin", "munich", "frankfurt",
+    "france", "paris", "lyon",
+    "india", "bangalore", "mumbai", "delhi", "hyderabad",
+    "dubai", "uae", "abu dhabi",
+    "singapore", "hong kong",
+    "japan", "tokyo",
+    "china", "beijing", "shanghai",
+    "brazil", "sao paulo",
+    "netherlands", "amsterdam",
+    "sweden", "stockholm",
+    "norway", "oslo",
+    "denmark", "copenhagen",
+    "switzerland", "zurich",
+    "spain", "madrid", "barcelona",
+    "italy", "milan", "rome",
+    "poland", "warsaw",
+    "south africa", "johannesburg",
+    "new zealand", "auckland",
+    "ireland", "dublin",
+    "portugal", "lisbon",
+    "remote worldwide", "global remote",
+]
 
 # --- Metrics Tracker ---
 class MetricsTracker:
@@ -59,7 +92,6 @@ class MetricsTracker:
         hit_rate = (self.cache_hits / self.total_queries) if self.total_queries > 0 else 0.85
         avg_faithfulness = sum(self.faithfulness_scores) / len(self.faithfulness_scores) if self.faithfulness_scores else 0.94
         avg_relevance = sum(self.relevance_scores) / len(self.relevance_scores) if self.relevance_scores else 0.91
-
         return {
             "retrieval_latency_ms": round(avg_latency, 1),
             "cache_hit_rate": round(hit_rate, 2),
@@ -77,15 +109,11 @@ async def setup_cache_collection(client: AsyncQdrantClient):
     if not await client.collection_exists(cache_name):
         await client.create_collection(
             collection_name=cache_name,
-            vectors_config=models.VectorParams(
-                size=384, 
-                distance=models.Distance.COSINE
-            )
+            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
         )
         logger.info(f"Initialized cache collection: {cache_name}")
 
 async def get_from_cache(client: AsyncQdrantClient, query_vector: List[float], threshold: float = 0.95):
-    """Searches the cache for a similar question using query_points."""
     response = await client.query_points(
         collection_name="query_cache",
         query=query_vector,
@@ -98,7 +126,6 @@ async def get_from_cache(client: AsyncQdrantClient, query_vector: List[float], t
     return None
 
 async def save_to_cache(client: AsyncQdrantClient, query_vector: List[float], answer: str, question: str):
-    """Saves a new query-answer pair to the cache."""
     await client.upsert(
         collection_name="query_cache",
         points=[{
@@ -121,12 +148,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Model Registry singleton...")
     registry = get_registry()
     registry.initialise()
-    
     app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
     await setup_cache_collection(async_qdrant)
-    
     yield
-    
     await app.state.http_client.aclose()
     logger.info("Shutdown complete.")
 
@@ -138,7 +162,7 @@ app = FastAPI(
     version=settings.VERSION
 )
 
-# --- Add CORS Middleware ---
+# --- CORS Middleware ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -154,16 +178,21 @@ app.include_router(cv_routes.router, prefix="/api/v1/cv", tags=["CV Analysis"])
 
 # --- Helper: Resilient Web Search Fallback ---
 def execute_web_search(query: str) -> str:
-    """Executes a targeted search using duckduckgo_search with robust backend rotation."""
-    q_lower = query.lower()
-    
-    international_markers = ["canada", "usa", "australia", "germany", "remote", "worldwide"]
-    is_international = any(marker in q_lower for marker in international_markers)
+    """
+    Executes a targeted DuckDuckGo search.
 
-    if not is_international and ("uk" in q_lower or "job" in q_lower or "salary" in q_lower or "visa" in q_lower):
-        search_query = f"site:gov.uk {query}"
-    elif is_international and "salary" in q_lower:
-        search_query = f"{query} average salary canada glassdoor indeed"
+    For UK queries: adds site: filters for gov.uk, reed.co.uk etc.
+    For international queries: searches as-is with country/salary terms.
+    Falls back to a general search if the targeted search fails.
+    """
+    q_lower = query.lower()
+
+    international = any(m in q_lower for m in INTERNATIONAL_MARKERS)
+
+    if not international and any(k in q_lower for k in ["uk", "job", "salary", "visa", "sponsorship"]):
+        search_query = f"{query} site:gov.uk OR site:reed.co.uk OR site:totaljobs.com OR site:glassdoor.co.uk"
+    elif international and "salary" in q_lower:
+        search_query = f"{query} average salary glassdoor indeed 2024"
     else:
         search_query = query
 
@@ -172,7 +201,10 @@ def execute_web_search(query: str) -> str:
         with DDGS(timeout=15) as ddgs:
             results = list(ddgs.text(search_query, max_results=3, backend="auto"))
         if results:
-            return "\n\n".join([f"Title: {r.get('title')}\nSource URL: {r.get('href')}\nContent: {r.get('body')}" for r in results])
+            return "\n\n".join([
+                f"Title: {r.get('title')}\nSource URL: {r.get('href')}\nContent: {r.get('body')}"
+                for r in results
+            ])
     except GeneratorExit:
         pass
     except Exception as e:
@@ -184,97 +216,176 @@ def execute_web_search(query: str) -> str:
             except Exception:
                 pass
 
+    # General fallback search
     try:
         with DDGS(timeout=15) as ddgs:
             results = list(ddgs.text(query, max_results=3, backend="auto"))
         if results:
-            return "\n\n".join([f"Title: {r.get('title')}\nSource URL: {r.get('href')}\nContent: {r.get('body')}" for r in results])
+            return "\n\n".join([
+                f"Title: {r.get('title')}\nSource URL: {r.get('href')}\nContent: {r.get('body')}"
+                for r in results
+            ])
     except GeneratorExit:
         pass
     except Exception as inner_e:
-        logger.error(f"Secondary DDGS general search failed: {str(inner_e)}")
+        logger.error(f"Secondary DDGS search failed: {str(inner_e)}")
 
-    if "visa" in q_lower or "salary" in q_lower and not is_international:
+    # Static fallback for UK visa queries
+    if "visa" in q_lower or ("salary" in q_lower and not international):
         return (
             "Title: UK Skilled Worker visa: Your job and salary requirements 2026\n"
             "Source URL: https://www.gov.uk/skilled-worker-visa/your-job\n"
             "Content: The standard general salary threshold for a UK Skilled Worker visa is £41,700 per year, "
-            "or the specific going rate for the occupation code, whichever is higher. Eligible tech workers and "
-            "recent graduates/under 26 may qualify for lower thresholds starting from £33,400 under specific conditions."
+            "or the specific going rate for the occupation code, whichever is higher."
         )
 
     return ""
 
 # --- Helper: Self-Learning Corpus Storage ---
 async def store_web_results_to_corpus(query: str, web_context: str, encoder):
-    """Embeds and upserts verified web search snippets back into Qdrant uk_jobs_data (skips empty results)."""
+    """Stores verified web search results back into uk_jobs_data for future retrieval."""
     if not web_context or "No external web results found" in web_context:
-        logger.info("Skipping corpus storage: No valid web results content to store.")
         return
 
     try:
         blocks = [b.strip() for b in web_context.split("\n\n") if b.strip()]
         points = []
-        
         for idx, block in enumerate(blocks):
             if not block:
                 continue
-                
             vector = encoder.encode(block).tolist()
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{query}-{idx}-{block[:30]}"))
-            
-            points.append(
-                models.PointStruct(
-                    id=point_id,
-                    vector=vector,
-                    payload={
-                        "content": block,
-                        "text": block,
-                        "source": "web_learned",
-                        "type": "web",
-                        "learned": True,
-                        "original_query": query,
-                        "learned_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                )
-            )
-            
+            points.append(models.PointStruct(
+                id=point_id,
+                vector=vector,
+                payload={
+                    "content": block,
+                    "text": block,
+                    "source": "web_learned",
+                    "type": "web",
+                    "learned": True,
+                    "original_query": query,
+                    "learned_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            ))
         if points:
-            await async_qdrant.upsert(
-                collection_name=COLLECTION_NAME,
-                points=points
-            )
-            logger.info(f"Self-Learning Corpus Storage: Successfully stored {len(points)} web snippets into '{COLLECTION_NAME}'.")
+            await async_qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+            logger.info(f"Self-learning: stored {len(points)} web snippets into corpus.")
     except Exception as e:
-        logger.error(f"Failed to store web results into Qdrant corpus: {str(e)}")
+        logger.error(f"Failed to store web results: {str(e)}")
 
-# --- Streaming RAG Endpoint with Out-of-Domain Fallback ---
+# --- International Streaming Generator ---
+async def international_stream_generator(question: str, model_name: str):
+    """
+    Streams an answer for international (non-UK) queries using DuckDuckGo.
+
+    Design note (dissertation):
+        International queries bypass Qdrant entirely. The corpus only
+        covers UK job market data. Routing non-UK queries to web search
+        prevents the LLM from hallucinating UK salaries for non-UK locations.
+        This is the geographic domain boundary of the RAG system.
+    """
+    web_context = execute_web_search(question)
+
+    if not web_context:
+        yield 'data: {"content": "I could not find web results for that location. Please try rephrasing your query."}\n\n'
+        return
+
+    final_prompt = build_final_prompt(question, web_context)
+    response = None
+
+    try:
+        response = llm_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": final_prompt}],
+            temperature=0.0,
+            max_tokens=400,
+            stream=True
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield f'data: {{"content": {json.dumps(delta)}}}\n\n'
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        logger.error(f"International stream error: {str(e)}")
+        yield f'data: {{"content": "Error fetching web results: {str(e)}"}}\n\n'
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+# --- Streaming RAG Endpoint ---
 @app.post("/api/v1/chat-stream", tags=["Retrieval & Generation"])
 async def chat_stream(payload: dict):
+    """
+    Main query endpoint. Routes queries to either:
+      A) International web search  — if query mentions a non-UK location
+      B) Local Qdrant RAG pipeline — for all UK queries
+
+    Flow for UK queries:
+      1. Encode question → query vector
+      2. Search uk_jobs_data in Qdrant (top 10)
+      3. Rerank with cross-encoder (top 3)
+      4. Pass to AutonomousRAGAgent for regional routing + LLM streaming
+
+    Flow for international queries:
+      1. Detect international marker in question
+      2. Skip Qdrant
+      3. DuckDuckGo web search → LLM → stream response
+    """
     start_time = time.time()
     question = payload.get("question", "")
     model_name = payload.get("model", "llama3.2")
     limit = payload.get("limit", 3)
-    
+
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     registry = get_registry()
     encoder = registry.current_embedding_model
     reranker = registry.current_reranker_model
-    
+
     if encoder is None or reranker is None:
         raise HTTPException(status_code=503, detail="Models are still loading.")
 
+    # ── STEP 1: International query bypass ───────────────────────────────────
+    # Check BEFORE encoding or hitting Qdrant.
+    # If the query is about a non-UK location, skip corpus retrieval entirely
+    # and stream directly from web search results.
+    q_lower = question.lower()
+    is_international = any(marker in q_lower for marker in INTERNATIONAL_MARKERS)
+
+    if is_international:
+        logger.info(f"International query detected — bypassing Qdrant: '{question[:60]}'")
+        metrics_tracker.record_query(
+            latency_ms=(time.time() - start_time) * 1000,
+            cache_hit=False,
+            web_fallback=True
+        )
+        return StreamingResponse(
+            international_stream_generator(question, model_name),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            }
+        )
+
+    # ── STEP 2: UK query — Qdrant retrieval + reranking ──────────────────────
     try:
         query_vector = encoder.encode(question).tolist()
         response = await async_qdrant.query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
-            limit=10 
+            limit=10
         )
         search_results = response.points
-        
+
         def get_payload_text(hit):
             if not hit.payload:
                 return ""
@@ -284,19 +395,23 @@ async def chat_stream(payload: dict):
             pairs = [(question, get_payload_text(hit)) for hit in search_results if get_payload_text(hit)]
             if pairs:
                 scores = reranker.predict(pairs)
-                ranked_results = sorted(zip(search_results[:len(pairs)], scores), key=lambda x: x[1], reverse=True)
+                ranked_results = sorted(
+                    zip(search_results[:len(pairs)], scores),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
                 top_chunks = [hit[0] for hit in ranked_results[:limit]]
             else:
                 top_chunks = []
         else:
             top_chunks = []
-            
+
         latency_ms = (time.time() - start_time) * 1000
         metrics_tracker.record_query(latency_ms=latency_ms, cache_hit=False, web_fallback=False)
 
+        # ── STEP 3: Stream via AutonomousRAGAgent ─────────────────────────────
         async def safe_generator():
             try:
-                # FIX: Remove 'await' from the generator call itself
                 async for chunk in rag_agent.query_and_learn_stream(
                     question=question,
                     top_chunks=top_chunks,
@@ -308,11 +423,9 @@ async def chat_stream(payload: dict):
                 pass
             except asyncio.CancelledError:
                 pass
-            finally:
-                pass
 
         return StreamingResponse(
-            safe_generator(), 
+            safe_generator(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -324,8 +437,8 @@ async def chat_stream(payload: dict):
     except Exception as e:
         logger.error(f"Streaming query processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-# --- Mount Static Frontend & UI Dashboard ---
+
+# --- Mount Static Frontend ---
 os.makedirs("static/benchmarks", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -348,13 +461,13 @@ class ChatExportRequest(BaseModel):
 # --- Background Execution ---
 def execute_pipeline():
     try:
-        logger.info("Background thread spinning up master ingestion pipeline process...")
+        logger.info("Background ingestion pipeline starting...")
         pipeline = IngestionPipeline()
         pipeline.run()
     except Exception as e:
-        logger.error(f"Critical breakdown in background ingestion workflow: {str(e)}")
+        logger.error(f"Ingestion pipeline error: {str(e)}")
 
-# --- Endpoints ---
+# --- System Endpoints ---
 @app.get("/health", tags=["System"])
 async def health_check():
     try:
@@ -370,21 +483,17 @@ async def trigger_ingestion(background_tasks: BackgroundTasks):
 
 @app.get("/api/v1/metrics/performance", tags=["System"])
 async def get_performance_metrics():
-    """Returns runtime performance benchmarks and evaluation metrics for UI visualization."""
-    return {
-        "status": "success",
-        "metrics": metrics_tracker.get_stats()
-    }
+    return {"status": "success", "metrics": metrics_tracker.get_stats()}
 
+# --- Chat Export Endpoint ---
 @app.post("/api/v1/export/chat", tags=["Retrieval & Generation"])
 async def export_chat(payload: ChatExportRequest):
-    """Parses chat history and generates a structured Word document (.docx) transcript with metadata."""
+    """Generates a structured Word document transcript of the chat session."""
     doc = Document()
     doc.add_heading('RAG Agent Chat Transcript', level=0)
-    
     doc.add_paragraph(f"Export Date & Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     doc.add_paragraph("---" * 20)
-    
+
     if not payload.messages:
         doc.add_paragraph('No chat messages recorded in this session.')
     else:
@@ -398,82 +507,68 @@ async def export_chat(payload: ChatExportRequest):
         q_count = 0
         web_count = 0
         latencies = []
-        
+
         i = 0
         while i < len(filtered_messages):
             msg = filtered_messages[i]
-            
             q_text = getattr(msg, "question", None) or (msg.text if msg.role == "user" else None)
-            
-            if q_text and i + 1 < len(filtered_messages) and filtered_messages[i+1].role != "user":
-                resp_msg = filtered_messages[i+1]
+
+            if q_text and i + 1 < len(filtered_messages) and filtered_messages[i + 1].role != "user":
+                resp_msg = filtered_messages[i + 1]
                 answer_text = resp_msg.text or resp_msg.answer or ""
                 source_text = resp_msg.source or "RAG corpus"
                 latency = resp_msg.latency_ms or 0.0
-                
+
                 q_count += 1
-                
                 p_q = doc.add_paragraph()
-                run_q_label = p_q.add_run(f"Question {q_count}: ")
-                run_q_label.bold = True
+                p_q.add_run(f"Question {q_count}: ").bold = True
                 p_q.add_run(q_text)
-                
-                p_a = doc.add_paragraph()
-                p_a.add_run(f"Answer: {answer_text}")
-                
+                doc.add_paragraph(f"Answer: {answer_text}")
                 p_meta = doc.add_paragraph()
                 p_meta.add_run(f"Source: {source_text}\n").italic = True
                 p_meta.add_run(f"Latency: {latency:.1f}ms").italic = True
-                
                 doc.add_paragraph("-" * 40)
-                
+
                 if "Web search" in str(source_text):
                     web_count += 1
                 if latency:
                     latencies.append(latency)
-                
                 i += 2
+
             elif getattr(msg, "question", None) and getattr(msg, "answer", None):
                 q_text = msg.question
                 answer_text = msg.answer
                 source_text = msg.source or "RAG corpus"
                 latency = msg.latency_ms or 0.0
-                
+
                 q_count += 1
-                
                 p_q = doc.add_paragraph()
-                run_q_label = p_q.add_run(f"Question {q_count}: ")
-                run_q_label.bold = True
+                p_q.add_run(f"Question {q_count}: ").bold = True
                 p_q.add_run(q_text)
-                
-                p_a = doc.add_paragraph()
-                p_a.add_run(f"Answer: {answer_text}")
-                
+                doc.add_paragraph(f"Answer: {answer_text}")
                 p_meta = doc.add_paragraph()
                 p_meta.add_run(f"Source: {source_text}\n").italic = True
                 p_meta.add_run(f"Latency: {latency:.1f}ms").italic = True
-                
                 doc.add_paragraph("-" * 40)
-                
+
                 if "Web search" in str(source_text):
                     web_count += 1
                 if latency:
                     latencies.append(latency)
-                
                 i += 1
             else:
                 i += 1
-                
+
         doc.add_heading('Session Summary', level=1)
         doc.add_paragraph(f"Total questions: {q_count}")
         doc.add_paragraph(f"Web search fallbacks: {web_count}")
         avg_lat = (sum(latencies) / len(latencies)) if latencies else 0.0
         doc.add_paragraph(f"Average latency: {avg_lat:.1f}ms")
-            
+
     file_stream = BytesIO()
     doc.save(file_stream)
     file_stream.seek(0)
-    
+
     return StreamingResponse(
         file_stream,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
