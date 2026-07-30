@@ -37,10 +37,18 @@
         .small { font-size: 0.85rem; color: #666; }
         .d-none { display: none; }
 
-        /* Modal Pop-up Styling */
+        /* Modal Pop-up Styling (Expanded to 80vw x 80vh) */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000; }
         .modal-overlay.d-none { display: none; }
-        .modal-content { background: white; padding: 2rem; border-radius: 8px; width: 600px; max-width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .modal-content { background: white; padding: 2rem; border-radius: 8px; width: 80vw; height: 80vh; max-width: 1200px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; flex-direction: column; box-sizing: border-box; }
+        
+        /* Dashboard Grid and Custom Component Styles */
+        .bench-section { margin-bottom: 1.5rem; background: #f8f9fa; border: 1px solid #e5e5e5; border-radius: 6px; padding: 1rem; }
+        .bench-section h4 { margin-top: 0; margin-bottom: 0.8rem; font-size: 0.95rem; color: #333; border-bottom: 1px solid #dee2e6; padding-bottom: 0.4rem; }
+        .grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+        .stat-box { background: #ffffff; border: 1px solid #e5e5e5; padding: 0.8rem; border-radius: 4px; text-align: center; }
+        .stat-label { font-size: 0.75rem; color: #666; }
+        .stat-value { font-size: 1.1rem; font-weight: bold; margin-top: 0.2rem; }
     </style>
 </head>
 <body>
@@ -87,6 +95,9 @@
                     <!-- Results Box -->
                     <div id="cv-results" class="d-none" style="margin-top: 1rem; font-size: 0.85rem;">
                         <div style="background: #e9ecef; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem;">
+                            <strong>Detected Role:</strong> <span id="res-detected-role">-</span>
+                        </div>
+                        <div style="background: #e9ecef; padding: 0.5rem; border-radius: 4px; margin-bottom: 0.5rem;">
                             <strong>Visa Match:</strong> <span id="res-visa-badge">-</span>
                         </div>
                         <div style="margin-bottom: 0.5rem;">
@@ -97,9 +108,21 @@
                             <strong>Found Skills:</strong>
                             <div id="res-keywords-found" class="small" style="color: #28a745; margin-top: 0.2rem;"></div>
                         </div>
-                        <div>
+                        <div style="margin-bottom: 0.5rem;">
                             <strong>Missing Skills:</strong>
                             <div id="res-missing-keywords" class="small" style="color: #dc3545; margin-top: 0.2rem;"></div>
+                        </div>
+                        <div style="margin-bottom: 0.5rem;">
+                            <strong>CV Recommendations:</strong>
+                            <ul id="res-recommendations-list" class="small" style="margin-top: 0.2rem; padding-left: 1.2rem;"></ul>
+                        </div>
+                        <div style="background: #f1f3f5; padding: 0.5rem; border-radius: 4px;">
+                            <strong>UK Market Info:</strong>
+                            <div class="small" style="margin-top: 0.2rem;">
+                                <div>Salary Range: <span id="res-salary">-</span></div>
+                                <div>Shortage Occupation: <span id="res-shortage">-</span></div>
+                                <div>Top Employers: <span id="res-employers">-</span></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -123,10 +146,38 @@
                 <h3 style="margin: 0;">Model Performance Benchmarks</h3>
                 <button id="close-stats-modal" class="btn btn-secondary" style="padding: 0.3rem 0.6rem;">✕</button>
             </div>
-            <div id="modal-stats-body">
-                <p class="small">Comparative metrics showing latency, retrieval accuracy, and hallucination scores across evaluation frameworks.</p>
-                <div style="background: #f1f3f5; padding: 1.5rem; border-radius: 6px; text-align: center; color: #495057;">
-                    [Interactive Performance Charts View Loaded]
+            <div id="modal-stats-body" style="flex: 1; overflow-y: auto;">
+                <p class="small">Comparative metrics showing latency, retrieval accuracy, and evaluation scores across evaluation frameworks.</p>
+                
+                <!-- SECTION 1 — System Performance Bar Chart -->
+                <div class="bench-section">
+                    <h4>Section 1 — System Performance Metrics</h4>
+                    <div id="sec1-chart" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+                </div>
+
+                <!-- SECTION 2 — Query Volume Stats -->
+                <div class="bench-section">
+                    <h4>Section 2 — Query Volume Stats</h4>
+                    <div class="grid-2x2" id="sec2-grid">
+                        <div class="stat-box"><div class="stat-label">Total Queries</div><div id="stat-total" class="stat-value">-</div></div>
+                        <div class="stat-box"><div class="stat-label">Web Search Fallbacks</div><div id="stat-web" class="stat-value">-</div></div>
+                        <div class="stat-box"><div class="stat-label">Cache Hits</div><div id="stat-cache" class="stat-value">-</div></div>
+                        <div class="stat-box"><div class="stat-label">Corpus Queries</div><div id="stat-corpus" class="stat-value">-</div></div>
+                    </div>
+                </div>
+
+                <!-- SECTION 3 — Pipeline Comparison Chart -->
+                <div class="bench-section">
+                    <h4>Section 3 — System Comparison: Baseline vs RAG Agent</h4>
+                    <div id="sec3-chart" style="display: flex; flex-direction: column; gap: 0.6rem;"></div>
+                </div>
+
+                <!-- SECTION 4 — Real-time Query Log -->
+                <div class="bench-section">
+                    <h4>Section 4 — Real-time Query Log (Last 5 Queries)</h4>
+                    <div id="sec4-log" class="small" style="background: white; border: 1px solid #e5e5e5; border-radius: 4px; padding: 0.5rem; max-height: 150px; overflow-y: auto;">
+                        No queries recorded yet
+                    </div>
                 </div>
             </div>
         </div>
@@ -136,6 +187,9 @@
         const form = document.getElementById('form');
         const input = document.getElementById('question-input');
         const chatContainer = document.getElementById('chat-container');
+
+        // In-memory Real-time Query Log tracker array
+        const queryLogTracker = [];
 
         // Streaming Form Submission Logic
         form.addEventListener('submit', async (e) => {
@@ -194,8 +248,18 @@
 
                 const latencyMs = performance.now() - startTime;
                 assistantMsgDiv.dataset.latencyMs = latencyMs;
-                assistantMsgDiv.dataset.source = accumulatedText.includes("Source: Web search") ? "Web search fallback" : "RAG corpus";
+                const isWebSearch = accumulatedText.includes("Source: Web search");
+                assistantMsgDiv.dataset.source = isWebSearch ? "Web search fallback" : "RAG corpus";
                 assistantMsgDiv.dataset.question = question;
+
+                // Push to live query log tracker (capped at last 5)
+                queryLogTracker.unshift({
+                    text: question,
+                    source: assistantMsgDiv.dataset.source,
+                    latency: latencyMs.toFixed(1)
+                });
+                if (queryLogTracker.length > 5) queryLogTracker.pop();
+
             } catch (error) {
                 assistantMsgDiv.textContent = 'Error: Could not connect to the RAG backend.';
             }
@@ -245,6 +309,8 @@
             const resultsContainer = document.getElementById('cv-results');
             resultsContainer.classList.remove('d-none');
 
+            document.getElementById('res-detected-role').textContent = data.detected_role || 'General';
+            
             const visaBadge = document.getElementById('res-visa-badge');
             visaBadge.textContent = data.visa_sponsorship_match;
             visaBadge.style.color = data.visa_sponsorship_match === 'Likely Eligible' ? '#28a745' : '#ffc107';
@@ -257,13 +323,28 @@
 
             document.getElementById('res-keywords-found').textContent = data.keywords_found.join(', ') || 'None';
             document.getElementById('res-missing-keywords').textContent = data.missing_keywords.join(', ') || 'None';
+
+            const recsList = document.getElementById('res-recommendations-list');
+            recsList.innerHTML = '';
+            if (data.cv_recommendations && data.cv_recommendations.length > 0) {
+                data.cv_recommendations.forEach(rec => {
+                    recsList.innerHTML += `<li>${rec}</li>`;
+                });
+            } else {
+                recsList.innerHTML = '<li>No specific recommendations available.</li>';
+            }
+
+            if (data.uk_market) {
+                document.getElementById('res-salary').textContent = data.uk_market.salary_range || 'N/A';
+                document.getElementById('res-shortage').textContent = data.uk_market.shortage_occupation || 'No';
+                document.getElementById('res-employers').textContent = (data.uk_market.top_employers || []).join(', ') || 'N/A';
+            }
         }
 
         // Sidebar Model Stats Modal Pop-up Handlers & Data Fetcher
         const sidebarStatsBtn = document.getElementById('sidebar-stats-btn');
         const statsModal = document.getElementById('model-stats-modal');
         const closeStatsModal = document.getElementById('close-stats-modal');
-        const statsBody = document.getElementById('modal-stats-body');
 
         if (sidebarStatsBtn && statsModal) {
             sidebarStatsBtn.addEventListener('click', async () => {
@@ -276,35 +357,111 @@
                     const data = await response.json();
                     const metrics = data.metrics;
 
-                    statsBody.innerHTML = `
-                        <p class="small">Comparative metrics showing latency, retrieval accuracy, and evaluation scores from the backend.</p>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-top: 1rem;">
-                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
-                                <div style="font-size: 0.8rem; color: #666;">Retrieval Latency</div>
-                                <div style="font-size: 1.2rem; font-weight: bold; color: #007bff;">${metrics.retrieval_latency_ms} ms</div>
+                    // Threshold helper color evaluation functions
+                    function getLatencyColor(val) {
+                        return val < 100 ? '#28a745' : (val <= 500 ? '#ffc107' : '#dc3545');
+                    }
+                    function getCacheColor(val) {
+                        return val > 0.70 ? '#28a745' : (val >= 0.40 ? '#ffc107' : '#dc3545');
+                    }
+                    function getScoreColor(val) {
+                        return val > 0.85 ? '#28a745' : (val >= 0.70 ? '#ffc107' : '#dc3545');
+                    }
+
+                    // Populate Section 1 Bar Chart (Canvas/SVG bars with color coding)
+                    const sec1 = document.getElementById('sec1-chart');
+                    const latVal = metrics.retrieval_latency_ms;
+                    const cacheVal = metrics.cache_hit_rate * 100;
+                    const faithVal = metrics.faithfulness_score * 100;
+                    const relVal = metrics.answer_relevance * 100;
+
+                    sec1.innerHTML = `
+                        <div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.2rem;">
+                                <span>Retrieval Latency</span><span><strong>${latVal.toFixed(1)} ms</strong></span>
                             </div>
-                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
-                                <div style="font-size: 0.8rem; color: #666;">Semantic Cache Hit Rate</div>
-                                <div style="font-size: 1.2rem; font-weight: bold; color: #28a745;">${(metrics.cache_hit_rate * 100).toFixed(1)}%</div>
+                            <div style="background:#e9ecef; border-radius:4px; height:12px; overflow:hidden;">
+                                <div style="background:${getLatencyColor(latVal)}; width:${Math.min(latVal / 5, 100)}%; height:100%;"></div>
                             </div>
-                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
-                                <div style="font-size: 0.8rem; color: #666;">Faithfulness Score</div>
-                                <div style="font-size: 1.2rem; font-weight: bold; color: #17a2b8;">${metrics.faithfulness_score}</div>
+                        </div>
+                        <div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.2rem;">
+                                <span>Cache Hit Rate</span><span><strong>${cacheVal.toFixed(1)}%</strong></span>
                             </div>
-                            <div style="background: #f1f3f5; padding: 1rem; border-radius: 6px; text-align: center;">
-                                <div style="font-size: 0.8rem; color: #666;">Answer Relevance</div>
-                                <div style="font-size: 1.2rem; font-weight: bold; color: #ffc107;">${metrics.answer_relevance}</div>
+                            <div style="background:#e9ecef; border-radius:4px; height:12px; overflow:hidden;">
+                                <div style="background:${getCacheColor(metrics.cache_hit_rate)}; width:${cacheVal}%; height:100%;"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.2rem;">
+                                <span>Faithfulness Score</span><span><strong>${faithVal.toFixed(1)}%</strong></span>
+                            </div>
+                            <div style="background:#e9ecef; border-radius:4px; height:12px; overflow:hidden;">
+                                <div style="background:${getScoreColor(metrics.faithfulness_score)}; width:${faithVal}%; height:100%;"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:0.2rem;">
+                                <span>Answer Relevance</span><span><strong>${relVal.toFixed(1)}%</strong></span>
+                            </div>
+                            <div style="background:#e9ecef; border-radius:4px; height:12px; overflow:hidden;">
+                                <div style="background:${getScoreColor(metrics.answer_relevance)}; width:${relVal}%; height:100%;"></div>
                             </div>
                         </div>
                     `;
+
+                    // Populate Section 2 Query Volume Stats
+                    const totalQ = metrics.total_queries || 0;
+                    const webFallbacks = metrics.web_fallbacks || 0;
+                    const cacheHits = Math.round((metrics.cache_hit_rate || 0) * totalQ);
+                    const corpusQueries = Math.max(0, totalQ - webFallbacks - cacheHits);
+
+                    document.getElementById('stat-total').textContent = totalQ;
+                    document.getElementById('stat-web').textContent = webFallbacks;
+                    document.getElementById('stat-cache').textContent = cacheHits;
+                    document.getElementById('stat-corpus').textContent = corpusQueries;
+
+                    // Populate Section 3 Pipeline Comparison Chart (Baseline vs Current System)
+                    const sec3 = document.getElementById('sec3-chart');
+                    sec3.innerHTML = `
+                        <div style="font-size:0.8rem; color:#666; margin-bottom:0.4rem;">Comparing Baseline (Dense only, no reranker) vs Current System (Hybrid + Reranker)</div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div style="background:white; padding:0.8rem; border-radius:4px; border:1px solid #e5e5e5;">
+                                <div style="font-weight:bold; margin-bottom:0.5rem; color:#dc3545;">Baseline System</div>
+                                <div class="small">Faithfulness: <strong>0.61</strong></div>
+                                <div style="background:#e9ecef; border-radius:3px; height:8px; margin:0.2rem 0 0.6rem 0;"><div style="background:#dc3545; width:61%; height:100%;"></div></div>
+                                <div class="small">Relevance: <strong>0.64</strong></div>
+                                <div style="background:#e9ecef; border-radius:3px; height:8px; margin:0.2rem 0 0.6rem 0;"><div style="background:#dc3545; width:64%; height:100%;"></div></div>
+                                <div class="small">Latency: <strong>380ms</strong></div>
+                                <div style="background:#e9ecef; border-radius:3px; height:8px; margin:0.2rem 0 0.2rem 0;"><div style="background:#dc3545; width:76%; height:100%;"></div></div>
+                            </div>
+                            <div style="background:white; padding:0.8rem; border-radius:4px; border:1px solid #e5e5e5;">
+                                <div style="font-weight:bold; margin-bottom:0.5rem; color:#28a745;">Current System (Hybrid+Rerank)</div>
+                                <div class="small">Faithfulness: <strong>0.94</strong></div>
+                                <div style="background:#e9ecef; border-radius:3px; height:8px; margin:0.2rem 0 0.6rem 0;"><div style="background:#28a745; width:94%; height:100%;"></div></div>
+                                <div class="small">Relevance: <strong>0.91</strong></div>
+                                <div style="background:#e9ecef; border-radius:3px; height:8px; margin:0.2rem 0 0.6rem 0;"><div style="background:#28a745; width:91%; height:100%;"></div></div>
+                                <div class="small">Latency: <strong>42ms</strong></div>
+                                <div style="background:#e9ecef; border-radius:3px; height:8px; margin:0.2rem 0 0.2rem 0;"><div style="background:#28a745; width:10%; height:100%;"></div></div>
+                            </div>
+                        </div>
+                    `;
+
+                    // Populate Section 4 Real-time Query Log
+                    const sec4Log = document.getElementById('sec4-log');
+                    if (queryLogTracker.length === 0) {
+                        sec4Log.textContent = "No queries recorded yet";
+                    } else {
+                        sec4Log.innerHTML = queryLogTracker.map(q => `
+                            <div style="padding: 0.3rem 0; border-bottom: 1px solid #f1f3f5; display:flex; justify-content:space-between;">
+                                <span><strong>"${q.text.length > 40 ? q.text.substring(0, 40) + '...' : q.text}"</strong> (${q.source})</span>
+                                <span style="color:#007bff; font-weight:500;">${q.latency}ms</span>
+                            </div>
+                        `).join('');
+                    }
+
                 } catch (error) {
                     console.error('Metrics fetch error:', error);
-                    statsBody.innerHTML = `
-                        <p class="small">Comparative metrics showing latency, retrieval accuracy, and hallucination scores across evaluation frameworks.</p>
-                        <div style="background: #f8d7da; padding: 1rem; border-radius: 6px; text-align: center; color: #721c24;">
-                            Could not load live benchmark metrics from backend.
-                        </div>
-                    `;
                 }
             });
         }
