@@ -343,7 +343,7 @@ async def chat_stream(payload: dict):
     query_vector = encoder.encode(question).tolist()
 
     # ── STEP 1.5: Semantic Cache Check ───────────────────────────────────────
-    cached = await get_from_cache(async_qdrant, query_vector, threshold=0.82)
+    cached = await get_from_cache(async_qdrant, query_vector, threshold=0.92)
     if cached:
         cached_answer = cached.get("answer", "")
         async def cached_generator():
@@ -428,16 +428,19 @@ async def chat_stream(payload: dict):
             except asyncio.CancelledError:
                 pass
             finally:
+                yield 'data: {"content": "", "source": "RAG corpus"}\n\n'
                 if full_answer:
                     complete = "".join(full_answer)
-                    asyncio.create_task(
-                        save_to_cache(
+                    try:
+                        await save_to_cache(
                             async_qdrant,
                             query_vector,
                             complete,
                             question
                         )
-                    )
+                        logger.info(f"[Cache] Saved answer for: {question[:50]}")
+                    except Exception as e:
+                        logger.warning(f"[Cache] Save failed: {e}")
 
         return StreamingResponse(
             safe_generator(),

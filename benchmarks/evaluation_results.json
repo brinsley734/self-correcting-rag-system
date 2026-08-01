@@ -1,0 +1,82 @@
+[
+  {
+    "id": "Q1",
+    "question": "What is the minimum salary for a software engineer UK Skilled Worker visa?",
+    "latency_ms": 16617.2,
+    "source": "RAG corpus",
+    "word_count": 53,
+    "answer": " The minimum salary for a Software Engineer (assuming they fall under the same SOC code as an Application Support Engineer) for a UK Skilled Worker visa, as of April 2024, is £38,700. However, if the job offer falls within the going rate for the specific SOC code, that amount may be used instead."
+  },
+  {
+    "id": "Q2",
+    "question": "What is the software engineer salary in Edinburgh Scotland?",
+    "latency_ms": 2918.2,
+    "source": "RAG corpus",
+    "word_count": 124,
+    "answer": "The average salary for a Software Engineer in Edinburgh, Scotland can vary depending on factors such as experience, skills, and the specific industry. However, according to Glassdoor and Payscale, the average base salary for a Software Engineer in Edinburgh ranges from £35,000 to £60,000 per year. Keep in mind that this is an estimate and actual salaries may differ based on individual circumstances. Also, remember that salaries in Edinburgh are typically 10-15% below London but the cost of living is significantly lower. This information should be considered when comparing salaries between the two cities. Additionally, employment laws in Scotland are different from those in England and Wales, so it's important to familiarize yourself with Scottish employment law if you're considering a job in Edinburgh. "
+  },
+  {
+    "id": "Q3",
+    "question": "What is the software engineer salary in London?",
+    "latency_ms": 1984.6,
+    "source": "RAG corpus",
+    "word_count": 252,
+    "answer": "Oracle Real Application Clusters (RAC) and Oracle Data Guard are two different database solutions provided by Oracle, each designed for specific use cases. 1. Oracle Real Application Clusters (RAC): This is a high-availability solution that provides scalability and failover capabilities for mission-critical applications. RAC allows multiple instances of an Oracle database to run on the same server or across multiple servers, sharing resources such as CPU, memory, and I/O. It's designed for applications requiring high performance and uptime, where a single point of failure is not acceptable. 2. Oracle Data Guard: This is a data protection solution that provides real-time data backup and disaster recovery capabilities. Data Guard creates one or more standby databases that are synchronized with the primary database using redo logs. In case of a failure in the primary database, the standby database can be promoted to become the new primary database, minimizing downtime. The key differences between Oracle RAC and Data Guard are: - Purpose: RAC is designed for high availability and scalability, while Data Guard is designed for data protection and disaster recovery. - Performance: RAC provides better performance as it allows multiple instances to share resources, whereas Data Guard has some performance overhead due to the synchronization process. - Failover: RAC provides automatic failover in case of a failure, while Data Guard requires manual intervention to promote the standby database to primary status during a disaster recovery scenario. - Cost: RAC typically requires more hardware resources compared to Data Guard, which might lead to higher costs. "
+  },
+  {
+    "id": "Q4",
+    "question": "Which companies in the UK sponsor software engineers?",
+    "latency_ms": 1110.0,
+    "source": "RAG corpus",
+    "word_count": 216,
+    "answer": "I'm sorry for any confusion, but as a career, technical, and visa advisor assistant, I don't have the capability to provide recipes. However, if you're interested in finding a recipe for Italian Lasagna, you can search for it online on various cooking websites or food apps such as Allrecipes, BBC Good Food, or Delish. Here's a simple recipe to get you started: Ingredients: - 9 lasagna noodles - 2 cups ricotta cheese - 1 egg - 3 cups shredded mozzarella cheese, divided - 1/2 cup grated Parmesan cheese - 2 1/2 cups marinara sauce, divided - 1 lb ground beef - 1 lb ground pork - 1 onion, chopped - 4 cloves garlic, minced - 1 tsp salt - 1 tsp dried oregano - 1 tsp dried basil - 1/2 tsp black pepper - 1 cup shredded spinach (optional) Instructions: 1. Cook lasagna noodles according to package instructions and drain. 2. In a bowl, mix ricotta cheese, egg, 1 1/2 cups mozzarella cheese, Parmesan cheese, and salt. 3. In a large skillet, cook ground beef, pork, onion, garlic, oregano, basil, and pepper over medium heat until browned. Drain excess fat. 4. Preheat oven to 375°F (190°C). 5. Spread 1 cup marinara sauce in the bottom of a 9x13-inch baking dish. 6. Place 3 cooked lasagna noodles "
+  },
+  {
+    "id": "Q5",
+    "question": "What is the nurse salary in Belfast and can they get a UK work visa?",
+    "latency_ms": 1390.9,
+    "source": "RAG corpus",
+    "word_count": 117,
+    "answer": "Based on the provided context, there isn't specific information about software engineer salaries in Edinburgh, Scotland for the year 2024. However, since Manchester and London tech salaries are given as references, we can infer that the salaries in Edinburgh might be approximately 10-15% lower than those in London. For a Senior Backend Engineer position, this could range from £48,600 to £78,000 (£60,000 - £80,000 * 0.9) and for Mid-level positions, it might be between £36,900 to £52,500 (£45,000 - £65,000 * 0.9). Please note that these are rough estimates and actual salaries may vary depending on factors such as the specific company, individual's experience, and skills. Also, keep in mind that Edinburgh operates under Scottish employment law. "
+  },
+  {
+    "id": "Q6",
+    "question": "Does a backend engineer paying £48,000 meet the UK Skilled Worker visa threshold for 2026?",
+    "latency_ms": 867.7,
+    "source": "RAG corpus",
+    "word_count": 0,
+    "answer": ""
+  },
+  {
+    "id": "Q7",
+    "question": "What programming languages are most in demand for UK tech jobs?",
+    "latency_ms": 956.0,
+    "source": "RAG corpus",
+    "word_count": 0,
+    "answer": ""
+  },
+  {
+    "id": "Q8",
+    "question": "What is the software engineer salary in Germany?",
+    "latency_ms": 26504.8,
+    "source": "Web search",
+    "word_count": 77,
+    "answer": " The Software Engineer salaries in Germany range from EUR 45,000 to EUR 95,000 per year. Junior Engineers can expect to earn between EUR 40,000 and EUR 55,000, while Mid-level Engineers typically earn between EUR 55,000 and EUR 75,000. Senior Engineers can earn upwards of EUR 75,000 and potentially more than EUR 100,000. Berlin and Munich are the highest paying cities in Germany for Software Engineers. Top employers include SAP, Siemens, BMW, Volkswagen, Zalando, and N26. (Source: https://www.levels.fyi/t/software-engineer/locations/germany)"
+  },
+  {
+    "id": "Q9",
+    "question": "What is the software engineer salary in Canada?",
+    "latency_ms": 9913.1,
+    "source": "Web search",
+    "word_count": 40,
+    "answer": " The average salary for a Software Engineer in Canada ranges from CAD 70,000 to CAD 140,000 as of 2025. Some top cities for this role are Toronto, Vancouver, and Waterloo. Notable employers include Shopify, RBC, TD Bank, and Amazon Canada."
+  },
+  {
+    "id": "Q10",
+    "question": "Can you give me a recipe for Italian lasagna?",
+    "latency_ms": 2818.2,
+    "source": "Web search",
+    "word_count": 0,
+    "answer": ""
+  }
+]
