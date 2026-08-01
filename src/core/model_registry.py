@@ -1,3 +1,6 @@
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 import asyncio
 from typing import Dict, Any, Optional
 import logging
@@ -36,8 +39,17 @@ class ModelRegistry:
         if self._initialized:
             return
         logger.info("Loading initial local embedding and reranking models...")
-        self.current_embedding_model = SentenceTransformer(self.current_embedding_model_name)
-        self.current_reranker_model = CrossEncoder(self.current_reranker_model_name)
+        
+        # Force local loading to prevent external connection attempts
+        self.current_embedding_model = SentenceTransformer(
+            self.current_embedding_model_name, 
+            local_files_only=True
+        )
+        self.current_reranker_model = CrossEncoder(
+            self.current_reranker_model_name, 
+            local_files_only=True
+        )
+        
         self._initialized = True
         logger.info("ModelRegistry initialized successfully with active local model instances.")
 
@@ -58,7 +70,7 @@ class ModelRegistry:
         async with self._lock:
             if embedding_model and embedding_model != self.current_embedding_model_name:
                 logger.info(f"Swapping local embedding model to: {embedding_model}")
-                self.current_embedding_model = SentenceTransformer(embedding_model)
+                self.current_embedding_model = SentenceTransformer(embedding_model, local_files_only=True)
                 self.current_embedding_model_name = embedding_model
                 
             if llm_model:
@@ -66,7 +78,7 @@ class ModelRegistry:
                 
             if reranker_model and reranker_model != self.current_reranker_model_name:
                 logger.info(f"Swapping local reranker model to: {reranker_model}")
-                self.current_reranker_model = CrossEncoder(reranker_model)
+                self.current_reranker_model = CrossEncoder(reranker_model, local_files_only=True)
                 self.current_reranker_model_name = reranker_model
 
 def get_registry() -> ModelRegistry:

@@ -6,7 +6,7 @@ import json as _json
 from typing import List
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
-from src.generation import build_final_prompt, client
+from src.generation import build_final_prompt, client, FALLBACK_MODELS
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -34,16 +34,16 @@ class AutonomousRAGAgent:
         question: str,
         top_chunks: List[models.ScoredPoint],
         encoder,
-        model_name: str = "llama3.2"
+        model_name: str = "mistral"
     ):
         """
-        Async generator that streams the LLM answer for a question.
+        Async generator that streams the LLM answer for a question with model failover.
 
         Steps:
           1. Detect UK regional context (Scotland, Wales, etc.)
           2. Extract text from Qdrant top_chunks
           3. Append regional modifier to context if detected
-          4. Build prompt and stream from Ollama
+          4. Build prompt and stream from Ollama with model failover chain
           5. Yield each token as SSE JSON: data: {"content": "..."}
         """
         q_lower = question.lower()
@@ -132,39 +132,56 @@ class AutonomousRAGAgent:
             yield 'data: {"content": "I could not find relevant information for this query in the knowledge base."}\n\n'
             return
 
-        # ── Build prompt and stream from LLM ─────────────────────────
-        # Uses build_final_prompt from generation.py to maintain
-        # consistent prompt format across the system.
-        # Streams directly here rather than calling generate_answer_stream
-        # to avoid losing the pre-built combined_context.
+        # ── Build prompt and stream from LLM with Failover ───────────
         final_prompt = build_final_prompt(question, combined_context)
-        response = None
 
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": final_prompt}],
-                temperature=0.0,
-                max_tokens=400,
-                stream=True
-            )
+        # Build model attempt order using the explicit priority chain
+        models_to_try = [m for m in FALLBACK_MODELS]
+        if model_name and model_name not in models_to_try:
+            models_to_try.insert(0, model_name)
 
-            for chunk in response:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    # SSE format: data: {"content": "text"}\n\n
-                    # Frontend parses parsed.content from each chunk
-                    yield f'data: {{"content": {_json.dumps(delta)}}}\n\n'
+        last_error = None
+        for attempt_model in models_to_try:
+            response = None
+            try:
+                logger.info(f"[LLM] Attempting model: {attempt_model}")
+                response = client.chat.completions.create(
+                    model=attempt_model,
+                    messages=[{"role": "user", "content": final_prompt}],
+                    temperature=0.0,
+                    max_tokens=400,
+                    stream=True,
+                    timeout=30,
+                )
 
-        except GeneratorExit:
-            # Client disconnected — exit cleanly
-            pass
-        except Exception as e:
-            logger.error(f"Agent streaming error: {str(e)}")
-            yield f'data: {{"content": "Error generating response: {str(e)}"}}\n\n'
-        finally:
-            if response is not None:
-                try:
-                    response.close()
-                except Exception:
-                    pass
+                # Signal which model is responding
+                yield f'data: {{"content": "", "model": "{attempt_model}"}}\n\n'
+
+                chunk_count = 0
+                for chunk in response:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        chunk_count += 1
+                        yield f'data: {{"content": {_json.dumps(delta)}}}\n\n'
+
+                if chunk_count > 0:
+                    logger.info(f"[LLM] Success with model: {attempt_model}")
+                    return  # Success — stop trying other models
+
+            except GeneratorExit:
+                return
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"[LLM] Model {attempt_model} failed: {e}")
+                logger.info(f"[LLM] Trying next fallback...")
+                if response is not None:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                continue  # Try next model
+
+        # All models failed
+        error_msg = f"All models unavailable. Last error: {last_error}"
+        logger.error(f"[LLM] {error_msg}")
+        yield f'data: {{"content": "Service temporarily unavailable. Please try again in a moment."}}\n\n'

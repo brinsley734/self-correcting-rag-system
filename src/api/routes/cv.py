@@ -460,18 +460,39 @@ def get_role_config(role: str) -> dict:
     return ROLE_CONFIGURATIONS.get(role, ROLE_CONFIGURATIONS["general"])
 
 def extract_text_from_file(filename: str, file_bytes: bytes) -> str:
-    """Extracts text content from uploaded document formats (.docx)."""
+    """Extracts text content from uploaded document formats (.docx or .pdf)."""
     if filename.endswith(".docx"):
         doc = Document(BytesIO(file_bytes))
         return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
     elif filename.endswith(".pdf"):
+        # Try pypdf first
         try:
             import pypdf
             reader = pypdf.PdfReader(BytesIO(file_bytes))
-            return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            if text.strip():
+                return text
+        except ImportError:
+            logger.warning("pypdf package not found. Trying alternative pdf extraction...")
         except Exception as e:
-            logger.error(f"PDF extraction error: {e}")
-            raise HTTPException(status_code=400, detail="Failed to parse PDF file format.")
+            logger.error(f"pypdf extraction error: {e}")
+
+        # Fallback pdf parsing via PyMuPDF (fitz) if available
+        try:
+            import fitz  # PyMuPDF
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                text = "\n".join([page.get_text() for page in doc])
+                if text.strip():
+                    return text
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.error(f"PyMuPDF extraction error: {e}")
+
+        raise HTTPException(
+            status_code=400, 
+            detail="Failed to parse PDF file format. Please install 'pypdf' (pip install pypdf) or upload a .docx file."
+        )
     else:
         raise HTTPException(status_code=400, detail="Unsupported file format. Please upload a .docx or .pdf file.")
 
@@ -496,6 +517,7 @@ async def analyse_cv(file: UploadFile = File(...)) -> Dict[Any, Any]:
     try:
         query_vector = encoder.encode(cv_text[:2000]).tolist()
         
+        # Updated to query_points compatible with newer qdrant-client versions
         response = await async_qdrant.query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
